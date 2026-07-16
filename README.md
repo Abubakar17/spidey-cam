@@ -78,5 +78,6 @@ Two more that matter if you're chasing feel:
 
 ## Known limits
 
+- Hand tracking is driven from inside the render loop, so if rendering ever drops below the camera's frame rate, the tracking rate drops with it — and the swipe needs a few tracking frames to fire. The unlucky consequence is that the clear gesture is at its least reliable exactly when the board is fullest, which is when you most want it. On a GPU there's plenty of headroom (each band only covers a fraction of the screen); it only bites under software rendering.
 - Hand slots are assigned by screen position, so crossing your hands over each other briefly scrambles the per-hand smoothing.
 - MediaPipe reports handedness assuming a mirrored image; since the raw camera feed is fed in unmirrored, the label is inverted before display. The quad ordering doesn't rely on it.

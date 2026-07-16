@@ -100,6 +100,13 @@ float sobelMag(vec2 s, vec2 t) {
   return length(vec2(gx, gy));
 }
 
+// HOUSE RULE: a filter FILTERS — it never repaints the panel.
+// Every filter's base must be the footage under the quad (tinted, posterised,
+// inked, misregistered, whatever), NEVER a flat paper or black field with
+// artwork drawn on top. The moment you start from paper, the band stops reading
+// as a lens onto the room and starts reading as a sticker pasted over it.
+// Ink, dots and lines go ON the footage; the room always shows through.
+
 // Punch the webcam's flat, low-contrast picture into comic territory: saturate
 // hard, then crush to a few flat levels. Nearly every filter starts here.
 vec3 popColor(vec3 rgb, float levels) {
@@ -132,7 +139,7 @@ const BENDAY = `
 vec3 filterColor(vec2 luv, vec2 suv) {
   vec3 rgb = sampleVideo(suv);
   float l = luma(rgb);
-  vec3 flatCol = popColor(rgb, 4.0);
+  vec3 flatCol = popColor(rgb, 5.0);               // the footage, not a paper fill
 
   float dens = smoothstep(0.78, 0.10, l);          // ink only where it's dark
   vec2 g = rot2(radians(15.0)) * (luv * (u_quadSize / 6.5));
@@ -158,28 +165,24 @@ vec3 filterColor(vec2 luv, vec2 suv) {
   vec2 drift = (luv - 0.5) * 0.03 * smoothstep(0.0, 0.7, length(luv - 0.5));
   vec2 wob = vec2(sin(t * 2.7), cos(t * 3.3)) * 0.004 + drift;
 
-  float a = luma(sampleVideo(suv + wob));
-  float b = luma(sampleVideo(suv - wob));
+  // Pull two offset samples of the FOOTAGE and rebuild the picture from them:
+  // warm channels ride one plate, cool the other. That's what off-register
+  // printing actually does to a photo — the room stays legible, it just splits.
+  vec3 A = sampleVideo(suv + wob);
+  vec3 B = sampleVideo(suv - wob);
+  vec3 col = popColor(vec3(A.r, mix(A.g, B.g, 0.5), B.b), 5.0);
 
-  // Plate separation is the whole ballgame: give both plates a broad density
-  // ramp and they both ink everything, and you get mud. Pink carries the broad
-  // midtones, blue only drops into the genuine shadows.
-  float dA = smoothstep(0.82, 0.18, a);            // pink plate: midtones
-  float dB = smoothstep(0.40, 0.01, b);            // blue plate: shadows only
-
+  // Ink veils on top, keyed to each plate's density.
   vec2 g = luv * (u_quadSize / 5.5);
+  float dA = smoothstep(0.85, 0.15, luma(A));      // pink: midtones
+  float dB = smoothstep(0.48, 0.02, luma(B));      // blue: shadows
   float sA = halftoneDot(rot2(radians(15.0)) * g, dA);
   float sB = halftoneDot(rot2(radians(75.0)) * g + 0.37, dB);
 
-  vec3 paper = vec3(0.96, 0.94, 0.87);
-  vec3 inkA = vec3(1.00, 0.11, 0.45);              // fluorescent pink
-  vec3 inkB = vec3(0.05, 0.42, 0.92);              // process blue
-
-  vec3 col = paper;
-  col *= mix(vec3(1.0), inkA, sA);
-  col *= mix(vec3(1.0), inkB, sB);
+  col *= mix(vec3(1.0), vec3(1.00, 0.42, 0.68), sA * 0.6);
+  col *= mix(vec3(1.0), vec3(0.42, 0.58, 1.00), sB * 0.6);
   col *= 0.97 + 0.03 * vnoise(luv * 220.0);        // paper tooth
-  return col;
+  return clamp(col, 0.0, 1.0);
 }`;
 
 // ---------------------------------------------------------------------------
@@ -195,13 +198,17 @@ vec3 filterColor(vec2 luv, vec2 suv) {
                 vnoise(luv * 6.0 + 41.0 - t * 13.0)) - 0.5;
   vec2 s = suv + n * 0.007;                        // the boil
 
+  // Sample the footage through the boil, so the picture itself wobbles like a
+  // pencil test — then ink over it. The room stays visible underneath.
+  vec3 rgb = sampleVideo(s);
   float e = sobelMag(s, 1.5 / u_res);
-  float l = luma(sampleVideo(s));
-  l = clamp((l - 0.5) * 1.6 + 0.5, 0.0, 1.0);
+  float l = luma(rgb);
 
-  vec3 paper = vec3(0.90, 0.93, 0.99);
-  vec3 ink   = vec3(0.07, 0.16, 0.48);
+  vec3 col = popColor(rgb, 5.0);
+  col = mix(col, col * vec3(0.82, 0.90, 1.18), 0.55);  // cool it toward blue pencil
+  col = mix(col, vec3(1.0), 0.12);                     // faint wash, not a repaint
 
+  vec3 ink = vec3(0.06, 0.14, 0.46);
   float line = smoothstep(0.09, 0.34, e);          // webcam edges are soft — bite early
   float shadow = smoothstep(0.58, 0.10, l);
 
@@ -209,9 +216,8 @@ vec3 filterColor(vec2 luv, vec2 suv) {
   vec2 h = (luv + n * 0.02) * (u_quadSize / 5.0);
   float h1 = smoothstep(0.2, 0.85, sin((h.x + h.y) * 3.14159));
   float h2 = smoothstep(0.5, 0.95, sin((h.x - h.y) * 3.14159));
-  float hatch = (h1 * shadow + h2 * smoothstep(0.35, 0.02, l)) * 0.55;
+  float hatch = (h1 * shadow + h2 * smoothstep(0.35, 0.02, l)) * 0.5;
 
-  vec3 col = mix(paper, paper * 0.90, shadow * 0.45);
   return mix(col, ink, clamp(line + hatch, 0.0, 1.0));
 }`;
 
@@ -342,12 +348,11 @@ vec3 filterColor(vec2 luv, vec2 suv) {
   float f = abs(fract(ang * N) - 0.5);
   float line = (1.0 - smoothstep(w * 0.5, w, f)) * smoothstep(start, start + 0.10, rad);
 
-  // Fade the picture to paper FIRST, then lay lines over the top. Cross-fading
-  // straight from a dark base to the line layer instead leaves a muddy grey ring
-  // wherever the two are half-mixed.
-  vec3 paper = vec3(0.98, 0.96, 0.89);
-  vec3 col = mix(base, paper, smoothstep(0.58, 0.98, rad));
-  return mix(col, vec3(0.04, 0.03, 0.05), line);
+  // Lines are inked straight onto the footage — no paper fill. The room keeps
+  // showing through between the streaks; only a light bleach toward the rim sells
+  // the "drawn panel" feel without erasing what's there.
+  vec3 col = mix(base, min(base * 1.35 + 0.22, vec3(1.0)), smoothstep(0.55, 1.05, rad));
+  return mix(col, vec3(0.04, 0.03, 0.05), line * 0.9);
 }`;
 
 // ---------------------------------------------------------------------------
@@ -364,9 +369,12 @@ vec3 filterColor(vec2 luv, vec2 suv) {
   vec3 c2 = vec3(1.00, 0.15, 0.70);
   vec3 hue = mix(c1, c2, 0.5 + 0.5 * sin(luv.y * 5.0 - u_time * 2.5));
 
-  vec3 col = sampleVideo(suv) * 0.10;              // ghost of the picture
-  col += hue * halo * 0.85;
-  col += vec3(1.0) * core * 0.85;
+  // Keep the footage properly present and light the contours on top of it —
+  // crushing the picture to near-black turned this into a black rectangle with
+  // a drawing on it rather than a glow applied to the room.
+  vec3 col = popColor(sampleVideo(suv), 5.0) * 0.62;
+  col += hue * halo * 0.75;
+  col += vec3(1.0) * core * 0.8;
   // Stepped flicker so it feels drawn, not rendered.
   col *= 0.90 + 0.10 * hash21(vec2(floor(TWOS * 12.0), 1.0));
   return clamp(col, 0.0, 1.0);
