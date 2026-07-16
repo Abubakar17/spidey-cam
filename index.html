@@ -1,0 +1,211 @@
+<!doctype html>
+<!--
+  Finger Magic — comic filter frames stretched between your hands.
+
+  getUserMedia only works on a secure context, so this page MUST be served over
+  http://localhost or HTTPS. Opening index.html as a file:// URL will fail at the
+  camera step (and ES module imports will be blocked too).
+
+    npx serve .              → http://localhost:3000
+    python -m http.server    → http://localhost:8000
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finger Magic — Comic zones between your fingers</title>
+<style>
+  :root {
+    --bg: #08090c;
+    --ink: #eef1f6;
+    --muted: #838b9c;
+    --accent: #2ff3c4;
+    --line: rgba(255,255,255,0.10);
+    --panel: rgba(255,255,255,0.035);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    /* faint diagonal hatch */
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgba(255,255,255,0.022) 0px,
+      rgba(255,255,255,0.022) 1px,
+      transparent 1px,
+      transparent 7px
+    );
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px 64px;
+  }
+
+  main { width: 100%; max-width: 960px; }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: clamp(28px, 5vw, 44px);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin: 0 0 18px;
+  }
+
+  #status {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 16px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--panel);
+    font-size: 13.5px;
+    color: #c8cedb;
+    margin-bottom: 22px;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  #status::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex: none;
+    transition: background 140ms ease;
+  }
+  #status[data-tone="live"] { color: var(--ink); border-color: rgba(47,243,196,0.32); }
+  #status[data-tone="live"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  #status[data-tone="error"] { color: #ffb4a8; border-color: rgba(255,120,100,0.34); }
+  #status[data-tone="error"]::before { background: #ff7864; }
+
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0c0e13;
+  }
+
+  #gl { display: block; width: 100%; height: 100%; }
+
+  /* Overlays -------------------------------------------------------------- */
+
+  #dashes {
+    position: absolute;
+    right: 14px; bottom: 14px;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .dash {
+    width: 22px; height: 4px;
+    border-radius: 2px;
+    opacity: 0.92;
+    box-shadow: 0 0 10px currentColor;
+    background: currentColor;
+  }
+
+  #fps {
+    position: absolute;
+    left: 14px; bottom: 12px;
+    font: 500 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    pointer-events: none;
+  }
+  #fps[hidden] { display: none; }
+
+  #veil {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 14px;
+    text-align: center;
+    padding: 24px;
+    background: #0c0e13;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  #veil[hidden] { display: none; }
+
+  .shimmer {
+    width: 260px; height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #171a22 25%, #262b38 50%, #171a22 75%);
+    background-size: 400% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .shimmer.short { width: 150px; }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+  #veil.error .shimmer { display: none; }
+  #veilText { max-width: 420px; line-height: 1.55; }
+
+  #retry {
+    color: var(--accent);
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+  }
+
+  .legend {
+    margin: 18px 2px 0;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.7;
+  }
+  .legend b { color: #b6bece; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Finger Magic Lite</p>
+  <h1>Comic zones between your fingers</h1>
+  <div id="status" data-tone="idle">Loading hand tracking…</div>
+
+  <div class="stage">
+    <canvas id="gl" width="1280" height="720"></canvas>
+    <div id="dashes"></div>
+    <div id="fps" hidden>-- fps</div>
+    <div id="veil">
+      <div class="shimmer"></div>
+      <div class="shimmer short"></div>
+      <div id="veilText">Loading hand tracking…</div>
+      <button id="retry" hidden>Restart camera</button>
+    </div>
+  </div>
+
+  <p class="legend">
+    <b>Frame</b> — hold both hands up; the quad stretches between your thumbs and index fingers. &nbsp;·&nbsp;
+    <b>Pinch both hands</b> — stamps the frame in place and deals you the next filter. &nbsp;·&nbsp;
+    <b>Swipe hands apart fast</b> — blows every frame away. &nbsp;·&nbsp;
+    <b>f</b> — FPS counter.
+  </p>
+</main>
+
+<video id="cam" playsinline muted autoplay style="display:none"></video>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
